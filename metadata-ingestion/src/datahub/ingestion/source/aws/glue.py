@@ -663,6 +663,13 @@ class GlueSource(Source):
             table_name = table["Name"]
             full_table_name = f"{database_name}.{table_name}"
             self.report.report_table_scanned()
+            
+            # for test
+            self.report.report_warning(
+                table_name,
+                f"test---------Get table: {table_name}",
+            )
+            
             if not self.source_config.database_pattern.allowed(
                 database_name
             ) or not self.source_config.table_pattern.allowed(full_table_name):
