@@ -502,6 +502,9 @@ class GlueSource(Source):
         def get_tables_from_database(database_name: str) -> List[dict]:
             new_tables = []
 
+            # for test
+            logger.info(f"database now for table is {database_name}")
+
             # see https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/glue.html#Glue.Client.get_tables
             paginator = self.glue_client.get_paginator("get_tables")
 
@@ -513,6 +516,10 @@ class GlueSource(Source):
                 paginator_response = paginator.paginate(DatabaseName=database_name)
 
             for page in paginator_response:
+                # for test
+                new_table = page["TableList"]
+                logger.info(f"table now is {new_table}")
+
                 new_tables += page["TableList"]
 
             return new_tables
