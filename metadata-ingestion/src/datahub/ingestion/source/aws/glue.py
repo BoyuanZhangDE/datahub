@@ -539,12 +539,18 @@ class GlueSource(Source):
 
         if self.source_config.database_pattern.is_fully_specified_allow_list():
             database_names = self.source_config.database_pattern.get_allowed_list()
+            # for test
+            logger.info(f"first_route: database names are: {database_names}")
         else:
             database_names = get_database_names()
+            # for test
+            logger.info(f"second_route: database names are: {database_names}")
 
         all_tables: List[dict] = []
         for database in database_names:
             all_tables += get_tables_from_database(database)
+            # for test
+            logger.info(f"table names are:{[table['Name'] for table in all_tables]}")
         return all_tables
 
     def get_lineage_if_enabled(
@@ -658,9 +664,9 @@ class GlueSource(Source):
         database_seen = set()
         tables = self.get_all_tables()
         
-        import logging
-        logger = logging.getLogger(__name__)
-
+        # for test
+        logger.info("get_all_table done, start get_workunits")
+        
         for table in tables:
             database_name = table["DatabaseName"]
             table_name = table["Name"]
