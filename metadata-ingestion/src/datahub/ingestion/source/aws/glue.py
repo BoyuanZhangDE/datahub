@@ -657,6 +657,9 @@ class GlueSource(Source):
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
         database_seen = set()
         tables = self.get_all_tables()
+        
+        import logging
+        logger = logging.getLogger(__name__)
 
         for table in tables:
             database_name = table["DatabaseName"]
@@ -665,10 +668,8 @@ class GlueSource(Source):
             self.report.report_table_scanned()
             
             # for test
-            self.report.report_warning(
-                table_name,
-                f"test---------Get table: {table_name}",
-            )
+            logger.info(f"-------test_table_scanned {full_table_name}")
+
             
             if not self.source_config.database_pattern.allowed(
                 database_name
