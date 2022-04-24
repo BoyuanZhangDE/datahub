@@ -78,9 +78,20 @@ class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase):
     glue_s3_lineage_direction: str = "upstream"
     domain: Dict[str, AllowDenyPattern] = dict()
     catalog_id: Optional[str] = None
-    rowCount: Optional[str] = None
-    columnCount: Optional[str] = None
-    max: Optional[str] = None
+
+    # for dev
+    rowCount: Union[None, str]=None,
+    columnCount: Union[None, str]=None,
+    uniqueCount: Union[None, str]=None,
+    uniqueProportion: Union[None, str]=None,
+    nullCount: Union[None, int]=None,
+    nullProportion: Union[None, str]=None,
+    min: Union[None, str]=None,
+    max: Union[None, str]=None,
+    mean: Union[None, str]=None,
+    median: Union[None, str]=None,
+    stdev: Union[None, str]=None,
+
 
     @property
     def glue_client(self):
@@ -619,23 +630,11 @@ class GlueSource(Source):
             # instantiate profile class
             profile_payload = DatasetProfileClass(timestampMillis=get_sys_time())
 
-            # construct metric names
-            # metrics_size = f'DQP__{self.source_config.size_name}'
-            # metrics_column_count = f'DQP__{self.source_config.column_count_name}'
-            # metrics_completeness = f'DQP__{self.source_config.completeness_name}'
-            # metrics_distinctness = f'DQP__{self.source_config.distinctness_name}'
-            # metrics_maximum = f'DQP__{self.source_config.maximum_name}'
-            # metrics_minimum = f'DQP__{self.source_config.minimum_name}'
-            # metrics_mean = f'DQP__{self.source_config.mean_name}'
-            # metrics_sdv = f'DQP__{self.source_config.sdv_name}'
-
-            # for tables with no Deequ profile
-            # if not metrics_size in table_stats:
-            #     return None
-
             # Inject table level stats
-            profile_payload.rowCount = int(float(table_stats[self.source_config.rowCount]))
-            profile_payload.columnCount = int(float(table_stats[self.source_config.columnCount]))
+            if self.source_config.rowCount in table_stats:
+                profile_payload.rowCount = int(float(table_stats[self.source_config.rowCount]))
+            if self.source_config.columnCount in table_stats:
+                profile_payload.columnCount = int(float(table_stats[self.source_config.columnCount]))
 
             # inject column level stats
             profile_payload.fieldProfiles = []
@@ -649,29 +648,47 @@ class GlueSource(Source):
 
                 # test for dev 
                 # for string columns that don't have certain type of int metrics
+                if self.source_config.uniqueCount in column_params:
+                    column_profile.uniqueCount = column_params[
+                        self.source_config.uniqueCount
+                        ]
+                if self.source_config.uniqueProportion in column_params:
+                    column_profile.uniqueProportion = column_params[
+                        self.source_config.uniqueProportion
+                        ]
+                if self.source_config.nullCount in column_params:
+                    column_profile.nullCount = column_params[
+                        self.source_config.nullCount
+                        ]
+                if self.source_config.nullProportion in column_params:
+                    column_profile.nullProportion = column_params[
+                        self.source_config.nullProportion
+                        ]
+                if self.source_config.min in column_params:
+                    column_profile.min = column_params[
+                        self.source_config.min
+                        ]
                 if self.source_config.max in column_params:
                     column_profile.max = column_params[
                         self.source_config.max
                         ]
-
-                # if metrics_completeness in column_params:
-                #     column_profile.nullProportion = 1 - float(column_params[metrics_completeness])
-                # if metrics_distinctness in column_params:
-                #     column_profile.uniqueProportion = float(column_params[metrics_distinctness])
-                # if metrics_maximum in column_params:
-                #     column_profile.max = column_params[metrics_maximum]
-                # if metrics_mean in column_params:
-                #     column_profile.mean = column_params[metrics_mean]
-                # if metrics_minimum in column_params:
-                #     column_profile.min = column_params[metrics_minimum]
-                # if metrics_sdv in column_params:
-                #     column_profile.stdev = column_params[metrics_sdv]
+                if self.source_config.mean in column_params:
+                    column_profile.mean = column_params[
+                        self.source_config.mean
+                        ]
+                if self.source_config.median in column_params:
+                    column_profile.median = column_params[
+                        self.source_config.median
+                        ]
+                if self.source_config.stdev in column_params:
+                    column_profile.stdev = column_params[
+                        self.source_config.stdev
+                        ]
 
                 profile_payload.fieldProfiles.append(column_profile)
             
             # inject partition level stats
-            profile_payload.partitionSpec = None
-
+            # profile_payload.partitionSpec = None
 
             mcp = MetadataChangeProposalWrapper(
                 entityType="dataset",
