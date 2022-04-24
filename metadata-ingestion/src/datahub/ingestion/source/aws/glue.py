@@ -623,7 +623,7 @@ class GlueSource(Source):
             if self.source_config.catalog_id:
                 response = self.glue_client.get_table(
                     DatabaseName=database_name,
-                    Name=table_name
+                    Name=table_name,
                     CatalogId=self.source_config.catalog_id
                 )
             else:
