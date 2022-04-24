@@ -1,0 +1,27 @@
+# see https://datahubproject.io/docs/metadata-ingestion/source_docs/lookerfor complete documentation
+source:
+  type: "lookml"
+  config:
+    # Coordinates
+    base_folder: /datahub-ingestion/looker-ml/looker-dw-pg
+    env: "PROD"
+
+    # Credentials
+    api:
+      base_url: https://onepeloton.looker.com/
+      client_id: ${LOOKER_CLIENT_ID}
+      client_secret: ${LOOKER_CLIENT_SECRET}
+    
+    github_info:
+      repo: pelotoncycle/looker-dw-pg
+      branch: master
+      base_url: https://github.com
+    
+    connection_to_platform_map:
+      peloton-warehouse: redshift.peloton
+
+# see https://datahubproject.io/docs/metadata-ingestion/sink_docs/datahub for complete documentation
+sink:
+  type: "datahub-rest"
+  config:
+    server: "http://datahub-gms-service.data-platform.svc.cluster.local:8080"

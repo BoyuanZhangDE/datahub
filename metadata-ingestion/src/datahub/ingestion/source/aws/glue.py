@@ -78,6 +78,9 @@ class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase):
     glue_s3_lineage_direction: str = "upstream"
     domain: Dict[str, AllowDenyPattern] = dict()
     catalog_id: Optional[str] = None
+    rowCount: Optional[str] = None
+    columnCount: Optional[str] = None
+    max: Optional[str] = None
 
     @property
     def glue_client(self):
@@ -617,44 +620,52 @@ class GlueSource(Source):
             profile_payload = DatasetProfileClass(timestampMillis=get_sys_time())
 
             # construct metric names
-            metrics_size = f'DQP__{self.source_config.size_name}'
-            metrics_column_count = f'DQP__{self.source_config.column_count_name}'
-            metrics_completeness = f'DQP__{self.source_config.completeness_name}'
-            metrics_distinctness = f'DQP__{self.source_config.distinctness_name}'
-            metrics_maximum = f'DQP__{self.source_config.maximum_name}'
-            metrics_minimum = f'DQP__{self.source_config.minimum_name}'
-            metrics_mean = f'DQP__{self.source_config.mean_name}'
-            metrics_sdv = f'DQP__{self.source_config.sdv_name}'
+            # metrics_size = f'DQP__{self.source_config.size_name}'
+            # metrics_column_count = f'DQP__{self.source_config.column_count_name}'
+            # metrics_completeness = f'DQP__{self.source_config.completeness_name}'
+            # metrics_distinctness = f'DQP__{self.source_config.distinctness_name}'
+            # metrics_maximum = f'DQP__{self.source_config.maximum_name}'
+            # metrics_minimum = f'DQP__{self.source_config.minimum_name}'
+            # metrics_mean = f'DQP__{self.source_config.mean_name}'
+            # metrics_sdv = f'DQP__{self.source_config.sdv_name}'
 
             # for tables with no Deequ profile
-            if not metrics_size in table_stats:
-                return None
+            # if not metrics_size in table_stats:
+            #     return None
 
-            # table level stats
-            profile_payload.rowCount = int(float(table_stats[metrics_size]))
-            profile_payload.columnCount = int(float(table_stats[metrics_column_count]))
+            # Inject table level stats
+            profile_payload.rowCount = int(float(table_stats[self.source_config.rowCount]))
+            profile_payload.columnCount = int(float(table_stats[self.source_config.columnCount]))
 
-            # column level stats
+            # inject column level stats
             profile_payload.fieldProfiles = []
             for profile in column_stats:
-                column = profile['Name']
+                column_name = profile['Name']
                 column_params = profile['Parameters']
 
+                logger.info(f"column_name: {column_name}")
                 # instantiate column profile class for each column
-                column_profile = DatasetFieldProfileClass(fieldPath=column)
+                column_profile = DatasetFieldProfileClass(fieldPath=column_name)
 
-                if metrics_completeness in column_params:
-                    column_profile.nullProportion = 1 - float(column_params[metrics_completeness])
-                if metrics_distinctness in column_params:
-                    column_profile.uniqueProportion = float(column_params[metrics_distinctness])
-                if metrics_maximum in column_params:
-                    column_profile.max = column_params[metrics_maximum]
-                if metrics_mean in column_params:
-                    column_profile.mean = column_params[metrics_mean]
-                if metrics_minimum in column_params:
-                    column_profile.min = column_params[metrics_minimum]
-                if metrics_sdv in column_params:
-                    column_profile.stdev = column_params[metrics_sdv]
+                # test for dev 
+                # for string columns that don't have certain type of int metrics
+                if self.source_config.max in column_params:
+                    column_profile.max = column_params[
+                        self.source_config.max
+                        ]
+
+                # if metrics_completeness in column_params:
+                #     column_profile.nullProportion = 1 - float(column_params[metrics_completeness])
+                # if metrics_distinctness in column_params:
+                #     column_profile.uniqueProportion = float(column_params[metrics_distinctness])
+                # if metrics_maximum in column_params:
+                #     column_profile.max = column_params[metrics_maximum]
+                # if metrics_mean in column_params:
+                #     column_profile.mean = column_params[metrics_mean]
+                # if metrics_minimum in column_params:
+                #     column_profile.min = column_params[metrics_minimum]
+                # if metrics_sdv in column_params:
+                #     column_profile.stdev = column_params[metrics_sdv]
 
                 profile_payload.fieldProfiles.append(column_profile)
 
@@ -729,6 +740,7 @@ class GlueSource(Source):
                 yield wu
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
+        logger.info("start work units")
         database_seen = set()
         tables = self.get_all_tables()
 
@@ -736,6 +748,8 @@ class GlueSource(Source):
             database_name = table["DatabaseName"]
             table_name = table["Name"]
             full_table_name = f"{database_name}.{table_name}"
+            logger.warning(full_table_name)
+
             self.report.report_table_scanned()
             if not self.source_config.database_pattern.allowed(
                 database_name
@@ -746,6 +760,7 @@ class GlueSource(Source):
                 database_seen.add(database_name)
                 yield from self.gen_database_containers(database_name)
 
+            logger.info("start mce")
             mce = self._extract_record(table, full_table_name)
             workunit = MetadataWorkUnit(full_table_name, mce=mce)
             self.report.report_workunit(workunit)
@@ -765,6 +780,8 @@ class GlueSource(Source):
             yield from self.add_table_to_database_container(
                 dataset_urn=dataset_urn, db_name=database_name
             )
+
+            logger.info("start to lineage")
             mcp = self.get_lineage_if_enabled(mce)
             if mcp:
                 mcp_wu = MetadataWorkUnit(
@@ -773,6 +790,7 @@ class GlueSource(Source):
                 self.report.report_workunit(mcp_wu)
                 yield mcp_wu
             
+            logger.info("get profile")
             mcp = self.get_profile_if_enabled(mce, database_name, table_name)
             if mcp:
                 mcp_wu = MetadataWorkUnit(
