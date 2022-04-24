@@ -80,10 +80,12 @@ class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase):
     catalog_id: Optional[str] = None
 
     # for dev
-    uniqueCount: Union[None, int]=None,
-    uniqueProportion: Union[None, float]=None,
+    rowCount: Union[None, str]=None,
+    columnCount: Union[None, str]=None,
+    uniqueCount: Union[None, str]=None,
+    uniqueProportion: Union[None, str]=None,
     nullCount: Union[None, int]=None,
-    nullProportion: Union[None, float]=None,
+    nullProportion: Union[None, str]=None,
     min: Union[None, str]=None,
     max: Union[None, str]=None,
     mean: Union[None, str]=None,
