@@ -643,7 +643,7 @@ class GlueSource(Source):
                 column_name = profile['Name']
                 column_params = profile['Parameters']
 
-                logger.info(f"column_name: {column_name}")
+                logger.debug(f"column_name: {column_name}")
                 # instantiate column profile class for each column
                 column_profile = DatasetFieldProfileClass(fieldPath=column_name)
 
@@ -668,6 +668,9 @@ class GlueSource(Source):
                 #     column_profile.stdev = column_params[metrics_sdv]
 
                 profile_payload.fieldProfiles.append(column_profile)
+            
+            # inject partition level stats
+            profile_payload.partitionSpec = None
 
 
             mcp = MetadataChangeProposalWrapper(
@@ -740,7 +743,7 @@ class GlueSource(Source):
                 yield wu
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
-        logger.info("start work units")
+        logger.debug("start work units")
         database_seen = set()
         tables = self.get_all_tables()
 
@@ -748,7 +751,7 @@ class GlueSource(Source):
             database_name = table["DatabaseName"]
             table_name = table["Name"]
             full_table_name = f"{database_name}.{table_name}"
-            logger.warning(full_table_name)
+            logger.debug(full_table_name)
 
             self.report.report_table_scanned()
             if not self.source_config.database_pattern.allowed(
@@ -760,7 +763,7 @@ class GlueSource(Source):
                 database_seen.add(database_name)
                 yield from self.gen_database_containers(database_name)
 
-            logger.info("start mce")
+            logger.debug("start mce")
             mce = self._extract_record(table, full_table_name)
             workunit = MetadataWorkUnit(full_table_name, mce=mce)
             self.report.report_workunit(workunit)
@@ -781,20 +784,18 @@ class GlueSource(Source):
                 dataset_urn=dataset_urn, db_name=database_name
             )
 
-            logger.info("start to lineage")
-            mcp = self.get_lineage_if_enabled(mce)
-            if mcp:
+            mcp1 = self.get_lineage_if_enabled(mce)
+            if mcp1:
                 mcp_wu = MetadataWorkUnit(
-                    id=f"{full_table_name}-upstreamLineage", mcp=mcp
+                    id=f"{full_table_name}-upstreamLineage", mcp=mcp1
                 )
                 self.report.report_workunit(mcp_wu)
                 yield mcp_wu
             
-            logger.info("get profile")
-            mcp = self.get_profile_if_enabled(mce, database_name, table_name)
-            if mcp:
+            mcp2 = self.get_profile_if_enabled(mce, database_name, table_name)
+            if mcp2:
                 mcp_wu = MetadataWorkUnit(
-                    id=f"profile-{full_table_name}", mcp=mcp
+                    id=f"profile-{full_table_name}", mcp=mcp2
                 )
                 self.report.report_workunit(mcp_wu)
                 yield mcp_wu
