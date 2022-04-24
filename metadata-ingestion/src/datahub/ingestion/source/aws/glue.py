@@ -17,6 +17,7 @@ from datahub.emitter.mce_builder import (
     make_dataplatform_instance_urn,
     make_dataset_urn_with_platform_instance,
     make_domain_urn,
+    get_sys_time
 )
 from datahub.emitter.mcp import MetadataChangeProposalWrapper
 from datahub.emitter.mcp_builder import (
@@ -46,7 +47,9 @@ from datahub.metadata.schema_classes import (
     DataJobInputOutputClass,
     DataJobSnapshotClass,
     DataPlatformInstanceClass,
+    DatasetFieldProfileClass,
     DatasetLineageTypeClass,
+    DatasetProfileClass,
     DatasetPropertiesClass,
     MetadataChangeEventClass,
     OwnerClass,
@@ -68,12 +71,25 @@ class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase):
 
     extract_owners: Optional[bool] = True
     extract_transforms: Optional[bool] = True
+    extract_profile: Optional[bool] = False
     underlying_platform: Optional[str] = None
     ignore_unsupported_connectors: Optional[bool] = True
     emit_s3_lineage: bool = False
     glue_s3_lineage_direction: str = "upstream"
     domain: Dict[str, AllowDenyPattern] = dict()
     catalog_id: Optional[str] = None
+
+    # for dev
+    uniqueCount: Union[None, int]=None,
+    uniqueProportion: Union[None, float]=None,
+    nullCount: Union[None, int]=None,
+    nullProportion: Union[None, float]=None,
+    min: Union[None, str]=None,
+    max: Union[None, str]=None,
+    mean: Union[None, str]=None,
+    median: Union[None, str]=None,
+    stdev: Union[None, str]=None,
+
 
     @property
     def glue_client(self):
@@ -596,6 +612,93 @@ class GlueSource(Source):
                         return mcp
         return None
 
+    def get_profile_if_enabled(
+        self, mce: MetadataChangeEventClass, database_name: str, table_name: str 
+    ) -> Optional[MetadataChangeProposalWrapper]:
+        if self.source_config.extract_profile:
+
+            # extract profile stats from glue table
+            response = self.glue_client.get_table(
+                DatabaseName=database_name,
+                Name=table_name
+            )
+            column_stats = response['Table']['StorageDescriptor']['Columns']
+            table_stats = response['Table']['Parameters']
+
+            # instantiate profile class
+            profile_payload = DatasetProfileClass(timestampMillis=get_sys_time())
+
+            # Inject table level stats
+            if self.source_config.rowCount in table_stats:
+                profile_payload.rowCount = int(float(table_stats[self.source_config.rowCount]))
+            if self.source_config.columnCount in table_stats:
+                profile_payload.columnCount = int(float(table_stats[self.source_config.columnCount]))
+
+            # inject column level stats
+            profile_payload.fieldProfiles = []
+            for profile in column_stats:
+                column_name = profile['Name']
+                column_params = profile['Parameters']
+
+                logger.debug(f"column_name: {column_name}")
+                # instantiate column profile class for each column
+                column_profile = DatasetFieldProfileClass(fieldPath=column_name)
+
+                # test for dev 
+                # for string columns that don't have certain type of int metrics
+                if self.source_config.uniqueCount in column_params:
+                    column_profile.uniqueCount = column_params[
+                        self.source_config.uniqueCount
+                        ]
+                if self.source_config.uniqueProportion in column_params:
+                    column_profile.uniqueProportion = column_params[
+                        self.source_config.uniqueProportion
+                        ]
+                if self.source_config.nullCount in column_params:
+                    column_profile.nullCount = column_params[
+                        self.source_config.nullCount
+                        ]
+                if self.source_config.nullProportion in column_params:
+                    column_profile.nullProportion = column_params[
+                        self.source_config.nullProportion
+                        ]
+                if self.source_config.min in column_params:
+                    column_profile.min = column_params[
+                        self.source_config.min
+                        ]
+                if self.source_config.max in column_params:
+                    column_profile.max = column_params[
+                        self.source_config.max
+                        ]
+                if self.source_config.mean in column_params:
+                    column_profile.mean = column_params[
+                        self.source_config.mean
+                        ]
+                if self.source_config.median in column_params:
+                    column_profile.median = column_params[
+                        self.source_config.median
+                        ]
+                if self.source_config.stdev in column_params:
+                    column_profile.stdev = column_params[
+                        self.source_config.stdev
+                        ]
+
+                profile_payload.fieldProfiles.append(column_profile)
+            
+            # inject partition level stats
+            # profile_payload.partitionSpec = None
+
+            mcp = MetadataChangeProposalWrapper(
+                entityType="dataset",
+                entityUrn=mce.proposedSnapshot.urn,
+                changeType=ChangeTypeClass.UPSERT,
+                aspectName="datasetProfile",
+                aspect=profile_payload,
+            )
+            return mcp
+        return None
+
+
     def gen_database_key(self, database: str) -> DatabaseKey:
         return DatabaseKey(
             database=database,
@@ -655,6 +758,7 @@ class GlueSource(Source):
                 yield wu
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
+        logger.debug("start work units")
         database_seen = set()
         tables = self.get_all_tables()
 
@@ -662,6 +766,8 @@ class GlueSource(Source):
             database_name = table["DatabaseName"]
             table_name = table["Name"]
             full_table_name = f"{database_name}.{table_name}"
+            logger.debug(full_table_name)
+
             self.report.report_table_scanned()
             if not self.source_config.database_pattern.allowed(
                 database_name
@@ -672,6 +778,7 @@ class GlueSource(Source):
                 database_seen.add(database_name)
                 yield from self.gen_database_containers(database_name)
 
+            logger.debug("start mce")
             mce = self._extract_record(table, full_table_name)
             workunit = MetadataWorkUnit(full_table_name, mce=mce)
             self.report.report_workunit(workunit)
@@ -691,10 +798,19 @@ class GlueSource(Source):
             yield from self.add_table_to_database_container(
                 dataset_urn=dataset_urn, db_name=database_name
             )
-            mcp = self.get_lineage_if_enabled(mce)
-            if mcp:
+
+            mcp1 = self.get_lineage_if_enabled(mce)
+            if mcp1:
                 mcp_wu = MetadataWorkUnit(
-                    id=f"{full_table_name}-upstreamLineage", mcp=mcp
+                    id=f"{full_table_name}-upstreamLineage", mcp=mcp1
+                )
+                self.report.report_workunit(mcp_wu)
+                yield mcp_wu
+            
+            mcp2 = self.get_profile_if_enabled(mce, database_name, table_name)
+            if mcp2:
+                mcp_wu = MetadataWorkUnit(
+                    id=f"profile-{full_table_name}", mcp=mcp2
                 )
                 self.report.report_workunit(mcp_wu)
                 yield mcp_wu
