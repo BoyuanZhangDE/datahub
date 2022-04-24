@@ -623,6 +623,7 @@ class GlueSource(Source):
             response = self.glue_client.get_table(
                 DatabaseName=database_name,
                 Name=table_name
+                CatalogId=self.source_config.catalog_id
             )
             column_stats = response['Table']['StorageDescriptor']['Columns']
             table_stats = response['Table']['Parameters']
@@ -688,7 +689,7 @@ class GlueSource(Source):
                 profile_payload.fieldProfiles.append(column_profile)
             
             # inject partition level stats
-            # profile_payload.partitionSpec = None
+            profile_payload.partitionSpec = None
 
             mcp = MetadataChangeProposalWrapper(
                 entityType="dataset",
