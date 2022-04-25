@@ -620,20 +620,36 @@ class GlueSource(Source):
         if self.source_config.extract_profile:
 
             # extract profile stats from glue table
-            if self.source_config.catalog_id:
-                response = self.glue_client.get_table(
+            # if self.source_config.catalog_id:                    
+            #     response = self.glue_client.get_table(
+            #         DatabaseName=database_name,
+            #         Name=table_name,
+            #         CatalogId=self.source_config.catalog_id
+            #     )
+            # else:
+            #     response = self.glue_client.get_table(
+            #         DatabaseName=database_name,
+            #         Name=table_name
+            #     )
+            
+            # column_stats = response['Table']['StorageDescriptor']['Columns']
+            # table_stats = response['Table']['Parameters']
+
+            if self.source_config.catalog_id:                    
+                responses = self.glue_client.get_tables(
                     DatabaseName=database_name,
-                    Name=table_name,
                     CatalogId=self.source_config.catalog_id
                 )
             else:
-                response = self.glue_client.get_table(
-                    DatabaseName=database_name,
-                    Name=table_name
+                responses = self.glue_client.get_tables(
+                    DatabaseName=database_name
                 )
 
-            column_stats = response['Table']['StorageDescriptor']['Columns']
-            table_stats = response['Table']['Parameters']
+            response = [table for table in responses['TableList'] if table['Name'] == table_name][0]
+            
+            column_stats = response['StorageDescriptor']['Columns']
+            table_stats = response['Parameters']
+            
 
             # instantiate profile class
             profile_payload = DatasetProfileClass(timestampMillis=get_sys_time())
