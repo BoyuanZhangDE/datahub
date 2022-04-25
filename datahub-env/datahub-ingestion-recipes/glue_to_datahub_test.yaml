@@ -6,28 +6,25 @@ source:
     aws_region: "us-east-1"
     extract_transforms: false
     extract_profile: true
+    catalog_id: "921601918690"
     database_pattern:
       allow:
         - "nyctlcdb"
     table_pattern:
       allow:
         - "nyctlcdb.trip_data_yellow"
+
     rowCount: DQP__Size
     columnCount: DQP__column_count
-    # # uniqueCount: 
-    # # uniqueProportion: DQP__Distinctness
-    # # nullCount:
-    # # nullProportion:
-    # # min: DQP__Minimum
+    # uniqueCount: Union[None, int]=None,
+    uniqueProportion: DQP__Distinctness
+    # nullCount: Union[None, int]=None,
+    # nullProportion: Union[None, float]=None,
+    min: DQP__Minimum
     max: DQP__Maximum
-    # mean: DQP__Mean
-    # median:
-    # stdev: DQP__StandardDeviation
-    # quantiles:
-    # distinctValueFrequencies:
-    # histogram:
-    # sampleValues:
-
+    mean: DQP__Mean
+    # median: Union[None, str]=None,
+    stdev: DQP__StandardDeviation
 
 # see https://datahubproject.io/docs/metadata-ingestion/sink_docs/datahub for complete documentation
 sink:
