@@ -657,25 +657,29 @@ class GlueSource(Source):
                 # test for dev 
                 # for string columns that don't have certain type of int metrics
                 if self.source_config.uniqueCount in column_params:
-                    column_profile.uniqueCount = column_params[
-                        self.source_config.uniqueCount
-                        ]
+                    column_profile.uniqueCount = int(
+                        column_params[self.source_config.uniqueCount]
+                    )
                 if self.source_config.uniqueProportion in column_params:
-                    column_profile.uniqueProportion = column_params[
-                        self.source_config.uniqueProportion
-                        ]
+                    column_profile.uniqueProportion = float(
+                        column_params[self.source_config.uniqueProportion]
+                    )
                 if self.source_config.nullCount in column_params:
-                    column_profile.nullCount = column_params[
+                    column_profile.nullCount = int(
+                        column_params[
                         self.source_config.nullCount
                         ]
+                    )
                 if self.source_config.nullProportion in column_params:
-                    column_profile.nullProportion = column_params[
+                    column_profile.nullProportion = float(
+                        column_params[
                         self.source_config.nullProportion
                         ]
+                    )
                 if self.source_config.min in column_params:
                     column_profile.min = column_params[
                         self.source_config.min
-                        ]
+                        ]                    
                 if self.source_config.max in column_params:
                     column_profile.max = column_params[
                         self.source_config.max
