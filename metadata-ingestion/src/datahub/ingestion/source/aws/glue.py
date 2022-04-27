@@ -51,6 +51,8 @@ from datahub.metadata.schema_classes import (
     DatasetLineageTypeClass,
     DatasetProfileClass,
     DatasetPropertiesClass,
+    PartitionTypeClass,
+    PartitionSpecClass,
     MetadataChangeEventClass,
     OwnerClass,
     OwnershipClass,
@@ -620,35 +622,38 @@ class GlueSource(Source):
         if self.source_config.extract_profile:
 
             # extract profile stats from glue table
-            # if self.source_config.catalog_id:                    
-            #     response = self.glue_client.get_table(
-            #         DatabaseName=database_name,
-            #         Name=table_name,
-            #         CatalogId=self.source_config.catalog_id
-            #     )
-            # else:
-            #     response = self.glue_client.get_table(
-            #         DatabaseName=database_name,
-            #         Name=table_name
-            #     )
-            
-            # column_stats = response['Table']['StorageDescriptor']['Columns']
-            # table_stats = response['Table']['Parameters']
 
+            # with get_table
             if self.source_config.catalog_id:                    
-                responses = self.glue_client.get_tables(
+                response = self.glue_client.get_table(
                     DatabaseName=database_name,
+                    Name=table_name,
                     CatalogId=self.source_config.catalog_id
                 )
             else:
-                responses = self.glue_client.get_tables(
-                    DatabaseName=database_name
+                response = self.glue_client.get_table(
+                    DatabaseName=database_name,
+                    Name=table_name
                 )
-
-            response = [table for table in responses['TableList'] if table['Name'] == table_name][0]
             
-            column_stats = response['StorageDescriptor']['Columns']
-            table_stats = response['Parameters']
+            column_stats = response['Table']['StorageDescriptor']['Columns']
+            table_stats = response['Table']['Parameters']
+
+            # # with get_tables
+            # if self.source_config.catalog_id:                    
+            #     responses = self.glue_client.get_tables(
+            #         DatabaseName=database_name,
+            #         CatalogId=self.source_config.catalog_id
+            #     )
+            # else:
+            #     responses = self.glue_client.get_tables(
+            #         DatabaseName=database_name
+            #     )
+
+            # response = [table for table in responses['TableList'] if table['Name'] == table_name][0]
+            
+            # column_stats = response['StorageDescriptor']['Columns']
+            # table_stats = response['Parameters']
             
 
             # instantiate profile class
@@ -716,7 +721,10 @@ class GlueSource(Source):
                 profile_payload.fieldProfiles.append(column_profile)
             
             # inject partition level stats
-            profile_payload.partitionSpec = None
+            profile_payload.partitionSpec = PartitionSpecClass(
+                partition="[{'date': 'Apr14'}, {'date': 'Apr15'},]",
+                type=PartitionTypeClass.PARTITION,
+            )
 
             mcp = MetadataChangeProposalWrapper(
                 entityType="dataset",
