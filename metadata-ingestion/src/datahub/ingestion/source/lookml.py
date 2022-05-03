@@ -1116,10 +1116,13 @@ class LookMLSource(Source):
                     continue
 
                 logger.debug(f"Attempting to load view file: {include}")
-                looker_viewfile = viewfile_loader.load_viewfile(
-                    include, connectionDefinition, self.reporter
-                )
-                if looker_viewfile is not None:
+                    
+                if self.source_config.view_pattern.allowed(
+                    include.strip("view.lkml")
+                    ):
+                    looker_viewfile = viewfile_loader.load_viewfile(
+                        include, connectionDefinition, self.reporter
+                        )
                     for raw_view in looker_viewfile.views:
                         self.reporter.report_views_scanned()
                         try:
@@ -1166,7 +1169,10 @@ class LookMLSource(Source):
                                 self.reporter.report_views_dropped(
                                     str(maybe_looker_view.id)
                                 )
-
+                else:
+                    self.reporter.report_views_dropped(
+                        include.strip("view.lkml")
+                        )
         if (
             self.source_config.tag_measures_and_dimensions
             and self.reporter.workunits_produced != 0
