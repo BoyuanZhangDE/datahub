@@ -31,6 +31,7 @@ from datahub.ingestion.api.source import Source, SourceReport
 from datahub.ingestion.api.workunit import MetadataWorkUnit
 from datahub.ingestion.source.aws.aws_common import AwsSourceConfig
 from datahub.ingestion.source.aws.s3_util import make_s3_urn
+from datahub.ingestion.source.glue_profiling_config import GlueProfilingConfig
 from datahub.metadata.com.linkedin.pegasus2avro.common import Status
 from datahub.metadata.com.linkedin.pegasus2avro.metadata.snapshot import DatasetSnapshot
 from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
@@ -51,14 +52,17 @@ from datahub.metadata.schema_classes import (
     DatasetLineageTypeClass,
     DatasetProfileClass,
     DatasetPropertiesClass,
+    HistogramClass,
     PartitionTypeClass,
     PartitionSpecClass,
+    QuantileClass,
     MetadataChangeEventClass,
     OwnerClass,
     OwnershipClass,
     OwnershipTypeClass,
     UpstreamClass,
     UpstreamLineageClass,
+    ValueFrequencyClass
 )
 from datahub.utilities.hive_schema_to_avro import get_schema_fields_for_hive_column
 
@@ -69,31 +73,17 @@ DEFAULT_PLATFORM = "glue"
 VALID_PLATFORMS = [DEFAULT_PLATFORM, "athena"]
 
 
-class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase):
+class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase, GlueProfilingConfig):
 
     extract_owners: Optional[bool] = True
     extract_transforms: Optional[bool] = True
-    extract_profile: Optional[bool] = False
     underlying_platform: Optional[str] = None
     ignore_unsupported_connectors: Optional[bool] = True
     emit_s3_lineage: bool = False
     glue_s3_lineage_direction: str = "upstream"
     domain: Dict[str, AllowDenyPattern] = dict()
     catalog_id: Optional[str] = None
-
-    # for dev
-    rowCount: Union[None, str]=None,
-    columnCount: Union[None, str]=None,
-    uniqueCount: Union[None, str]=None,
-    uniqueProportion: Union[None, str]=None,
-    nullCount: Union[None, int]=None,
-    nullProportion: Union[None, str]=None,
-    min: Union[None, str]=None,
-    max: Union[None, str]=None,
-    mean: Union[None, str]=None,
-    median: Union[None, str]=None,
-    stdev: Union[None, str]=None,
-
+    profiling: GlueProfilingConfig = GlueProfilingConfig()
 
     @property
     def glue_client(self):
@@ -618,123 +608,169 @@ class GlueSource(Source):
 
     def get_profile_if_enabled(
         self, mce: MetadataChangeEventClass, database_name: str, table_name: str 
-    ) -> Optional[MetadataChangeProposalWrapper]:
-        if self.source_config.extract_profile:
+    ) -> Optional[list[MetadataChangeProposalWrapper]]:
+        if self.source_config.profiling.enabled:
+            if self.source_config.profiling.partitioned:
+                # for partitioned tables
+                if self.source_config.catalog_id:                    
+                    response = self.glue_client.get_partitions(
+                        DatabaseName=database_name,
+                        Name=table_name,
+                        CatalogId=self.source_config.catalog_id
+                    )
+                else:
+                    response = self.glue_client.get_partitions(
+                        DatabaseName=database_name,
+                        Name=table_name
+                    )
+                    
+                # build mcp for each partition
+                mcps = []
+                for partition in response['Partitions']:
+                    partition_column_name = self.source_config.profiling.partition_column_name
+                    partition_value = partition['Values'][0]    # only supports single-column partition now
+                    table_stats = partition['Parameters'] 
+                    column_stats = partition['StorageDescriptor']['Columns']
+                    
+                    profile_payload = self._data_profile_builder(mce, table_stats, column_stats)
+                    profile_payload.partitionSpec = PartitionSpecClass(
+                        partition=f"[{{'{partition_column_name}': '{partition_value}'}}]",
+                        type=PartitionTypeClass.PARTITION
+                    )
 
-            # extract profile stats from glue table
+                    mcp = MetadataChangeProposalWrapper(
+                        entityType="dataset",
+                        entityUrn=mce.proposedSnapshot.urn,
+                        changeType=ChangeTypeClass.UPSERT,
+                        aspectName="datasetProfile",
+                        aspect=profile_payload,
+                    )
 
-            # with get_table
-            if self.source_config.catalog_id:                    
-                response = self.glue_client.get_table(
-                    DatabaseName=database_name,
-                    Name=table_name,
-                    CatalogId=self.source_config.catalog_id
-                )
+                    mcps.append(mcp)
             else:
-                response = self.glue_client.get_table(
-                    DatabaseName=database_name,
-                    Name=table_name
-                )
-            
-            column_stats = response['Table']['StorageDescriptor']['Columns']
-            table_stats = response['Table']['Parameters']
-
-            # # with get_tables
-            # if self.source_config.catalog_id:                    
-            #     responses = self.glue_client.get_tables(
-            #         DatabaseName=database_name,
-            #         CatalogId=self.source_config.catalog_id
-            #     )
-            # else:
-            #     responses = self.glue_client.get_tables(
-            #         DatabaseName=database_name
-            #     )
-
-            # response = [table for table in responses['TableList'] if table['Name'] == table_name][0]
-            
-            # column_stats = response['StorageDescriptor']['Columns']
-            # table_stats = response['Parameters']
-            
-
-            # instantiate profile class
-            profile_payload = DatasetProfileClass(timestampMillis=get_sys_time())
-
-            # Inject table level stats
-            if self.source_config.rowCount in table_stats:
-                profile_payload.rowCount = int(float(table_stats[self.source_config.rowCount]))
-            if self.source_config.columnCount in table_stats:
-                profile_payload.columnCount = int(float(table_stats[self.source_config.columnCount]))
-
-            # inject column level stats
-            profile_payload.fieldProfiles = []
-            for profile in column_stats:
-                column_name = profile['Name']
-                column_params = profile['Parameters']
-
-                logger.debug(f"column_name: {column_name}")
-                # instantiate column profile class for each column
-                column_profile = DatasetFieldProfileClass(fieldPath=column_name)
-
-                # test for dev 
-                # for string columns that don't have certain type of int metrics
-                if self.source_config.uniqueCount in column_params:
-                    column_profile.uniqueCount = int(
-                        column_params[self.source_config.uniqueCount]
+                # for not partitioned tables
+                # extract profile stats from glue table parameters
+                if self.source_config.catalog_id:                    
+                    response = self.glue_client.get_table(
+                        DatabaseName=database_name,
+                        Name=table_name,
+                        CatalogId=self.source_config.catalog_id
                     )
-                if self.source_config.uniqueProportion in column_params:
-                    column_profile.uniqueProportion = float(
-                        column_params[self.source_config.uniqueProportion]
+                else:
+                    response = self.glue_client.get_table(
+                        DatabaseName=database_name,
+                        Name=table_name
                     )
-                if self.source_config.nullCount in column_params:
-                    column_profile.nullCount = int(
-                        column_params[
-                        self.source_config.nullCount
-                        ]
-                    )
-                if self.source_config.nullProportion in column_params:
-                    column_profile.nullProportion = float(
-                        column_params[
-                        self.source_config.nullProportion
-                        ]
-                    )
-                if self.source_config.min in column_params:
-                    column_profile.min = column_params[
-                        self.source_config.min
-                        ]                    
-                if self.source_config.max in column_params:
-                    column_profile.max = column_params[
-                        self.source_config.max
-                        ]
-                if self.source_config.mean in column_params:
-                    column_profile.mean = column_params[
-                        self.source_config.mean
-                        ]
-                if self.source_config.median in column_params:
-                    column_profile.median = column_params[
-                        self.source_config.median
-                        ]
-                if self.source_config.stdev in column_params:
-                    column_profile.stdev = column_params[
-                        self.source_config.stdev
-                        ]
+                
+                table_stats = response['Table']['Parameters'] 
+                column_stats = response['Table']['StorageDescriptor']['Columns']
 
-                profile_payload.fieldProfiles.append(column_profile)
-            
-            # inject partition level stats
-            profile_payload.partitionSpec = PartitionSpecClass(
-                partition="[{'date': 'Apr14'}, {'date': 'Apr15'},]",
-                type=PartitionTypeClass.PARTITION,
-            )
+                profile_payload = self._data_profile_builder(table_stats, column_stats)
 
-            mcp = MetadataChangeProposalWrapper(
-                entityType="dataset",
-                entityUrn=mce.proposedSnapshot.urn,
-                changeType=ChangeTypeClass.UPSERT,
-                aspectName="datasetProfile",
-                aspect=profile_payload,
-            )
-            return mcp
+                mcps = [
+                    MetadataChangeProposalWrapper(
+                        entityType="dataset",
+                        entityUrn=mce.proposedSnapshot.urn,
+                        changeType=ChangeTypeClass.UPSERT,
+                        aspectName="datasetProfile",
+                        aspect=profile_payload,
+                    )
+                ]
+            return mcps
         return None
+
+
+
+    def _data_profile_builder(
+        self,
+        table_stats: dict,
+        column_stats: dict,
+    ) -> Optional[list[MetadataChangeProposalWrapper]]:
+
+        # instantiate profile class
+        profile_payload = DatasetProfileClass(timestampMillis=get_sys_time())
+
+        # Inject table level stats
+        if self.source_config.profiling.rowCount in table_stats:
+            profile_payload.rowCount = int(float(table_stats[self.source_config.profiling.rowCount]))
+
+        if self.source_config.profiling.columnCount in table_stats:
+            profile_payload.columnCount = int(float(table_stats[self.source_config.profiling.columnCount]))
+
+        # inject column level stats
+        profile_payload.fieldProfiles = []
+        for profile in column_stats:
+            column_name = profile['Name']
+
+            if not 'Parameters' in profile:
+                logger.debug(f"{column_name} doesn't have parameters!")
+                continue
+
+            column_params = profile['Parameters']
+
+            # instantiate column profile class for each column
+            column_profile = DatasetFieldProfileClass(fieldPath=column_name)
+
+            # for string columns that don't have certain type of int metrics
+            if self.source_config.profiling.uniqueCount in column_params:
+                column_profile.uniqueCount = int(
+                    column_params[self.source_config.profiling.uniqueCount]
+                )
+            if self.source_config.profiling.uniqueProportion in column_params:
+                column_profile.uniqueProportion = float(
+                    column_params[self.source_config.profiling.uniqueProportion]
+                )
+            if self.source_config.profiling.nullCount in column_params:
+                column_profile.nullCount = int(
+                    column_params[
+                    self.source_config.profiling.nullCount
+                    ]
+                )
+            if self.source_config.profiling.nullProportion in column_params:
+                column_profile.nullProportion = float(
+                    column_params[
+                    self.source_config.profiling.nullProportion
+                    ]
+                )
+            if self.source_config.profiling.min in column_params:
+                column_profile.min = column_params[
+                    self.source_config.profiling.min
+                    ]                    
+            if self.source_config.profiling.max in column_params:
+                column_profile.max = column_params[
+                    self.source_config.profiling.max
+                    ]
+            if self.source_config.profiling.mean in column_params:
+                column_profile.mean = column_params[
+                    self.source_config.profiling.mean
+                    ]
+            if self.source_config.profiling.median in column_params:
+                column_profile.median = column_params[
+                    self.source_config.profiling.median
+                    ]
+            if self.source_config.profiling.stdev in column_params:
+                column_profile.stdev = column_params[
+                    self.source_config.profiling.stdev
+                    ]
+            # quantile
+            if self.source_config.profiling.quantiles and self.source_config.profiling.quantile_prefix:
+                column_profile.quantiles = []
+                for quantile in self.source_config.profiling.quantiles:
+                    quantile_full_name = f"{self.source_config.profiling.quantile_prefix}-{quantile}"
+                    if quantile_full_name in column_params:
+                        column_profile.quantiles.append(
+                            QuantileClass(
+                                quantile=str(quantile),
+                                value=str(column_params[quantile_full_name]),
+                            )
+                        )
+
+            # histogram to be added
+            # sample value to be added
+
+            profile_payload.fieldProfiles.append(column_profile)
+        return profile_payload
+    
 
 
     def gen_database_key(self, database: str) -> DatabaseKey:
@@ -837,21 +873,22 @@ class GlueSource(Source):
                 dataset_urn=dataset_urn, db_name=database_name
             )
 
-            mcp1 = self.get_lineage_if_enabled(mce)
-            if mcp1:
+            mcp_lineage = self.get_lineage_if_enabled(mce)
+            if mcp_lineage:
                 mcp_wu = MetadataWorkUnit(
-                    id=f"{full_table_name}-upstreamLineage", mcp=mcp1
+                    id=f"{full_table_name}-upstreamLineage", mcp=mcp_lineage
                 )
                 self.report.report_workunit(mcp_wu)
                 yield mcp_wu
             
-            mcp2 = self.get_profile_if_enabled(mce, database_name, table_name)
-            if mcp2:
-                mcp_wu = MetadataWorkUnit(
-                    id=f"profile-{full_table_name}", mcp=mcp2
-                )
-                self.report.report_workunit(mcp_wu)
-                yield mcp_wu
+            mcps_profile = self.get_profile_if_enabled(mce, database_name, table_name)
+            if mcps_profile:
+                for mcp_profile in mcps_profile:
+                    mcp_wu = MetadataWorkUnit(
+                        id=f"profile-{full_table_name}", mcp=mcp_profile
+                    )
+                    self.report.report_workunit(mcp_wu)
+                    yield mcp_wu
 
         if self.extract_transforms:
             yield from self._transform_extraction()
